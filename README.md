@@ -35,7 +35,7 @@ B: Run the bash script using the following command: <br>
 **bash -x pairedendquant.sh** <br>
 C: Check out your runtimes using the "time_log.txt" file to see how changing # of bootstraps/cores changes things, and estimate how long you will wait for your files to run<br>
 #Step 4: Generate master count file for kallisto output
-**For this, follow the RMarkdown text in this repository.**
+For this, follow the RMarkdown text in this repository.
 
 
 
