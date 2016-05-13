@@ -1,0 +1,126 @@
+---
+title: "Processing Kallisto Output"
+author: "Alison Paquette"
+date: "May 9, 2016"
+output: html_document
+---
+*Note*  This file was modified from https://benchtobioinformatics.wordpress.com/2015/07/10/using-kallisto-for-gene-expression-analysis-of-published-rnaseq-data/
+
+#Get Files
+```{r}
+setwd("~/Documents/Sickkidsptb/M_MRNA")
+directory<-"~/Documents/Sickkidsptb/M_MRNA"
+Files <- grep("output", list.files(directory),value=T)
+length(Files) #Does this match up with the number of files you would expect?
+#For Naming things
+yuck =c("output_","_M")
+samples<-gsub(x = Files, pattern = paste(yuck, collapse = "|"), replacement = "", ignore.case = TRUE)
+```
+#Make sure length of your files are the same
+
+```{r}
+length<-NULL
+for (i in 1:length(Files)){
+ #tmp = read.table(file = paste0(Files[i],"/abundance.txt"), header = T)
+  tmp = read.table(file = paste0(directory,"/",Files[i],"/abundance.tsv"), header = T)
+  assign(Files[i], tmp)
+  length<-rbind(length,length(tmp$target_id))
+  rownames(length)[i]<-samples[i]
+}
+length
+length=199005 #Change this based on what you see out of length
+```
+#Make sure the transcript ids are all the same (should be if using the same fasta)
+```{r}
+transcript.ids<-data.frame(matrix(NA,nrow=length,ncol=0))
+for (i in 1:length(Files)){
+ #tmp = read.table(file = paste0(Files[i],"/abundance.txt"), header = T)
+  tmp = read.table(file = paste0(directory,"/",Files[i],"/abundance.tsv"), header = T)
+  assign(Files[i], tmp)
+  transcript.ids<-cbind(transcript.ids,tmp$target_id)
+  colnames(transcript.ids)[i]<-samples[i]
+}
+
+for (i in 1:length(Files)){
+ #tmp = read.table(file = paste0(Files[i],"/abundance.txt"), header = T)
+  print(table(transcript.ids[,1]==transcript.ids[,i]))
+}
+```
+
+
+#Obtain Abundances
+```{r}
+RawData<-data.frame(matrix(NA,nrow=length,ncol=0))
+for (i in 1:length(Files)){
+ #tmp = read.table(file = paste0(Files[i],"/abundance.txt"), header = T)
+  tmp = read.table(file = paste0(directory,"/",Files[i],"/abundance.tsv"), header = T)
+  assign(Files[i], tmp)
+  RawData<-cbind(RawData,tmp$est_counts)
+  colnames(RawData)[i]<-samples[i]
+}
+rownames(RawData)<-transcript.ids[,1]
+#Process to get CPM
+```
+#Remove mostly NA reads or mean reads <10
+```{r}
+bad.microrna<- rowMeans(RawData==0) > 0.2
+table(bad.microrna) #True=what you will lose
+RawData.1<-RawData[!bad.microrna,]
+table(is.na(RawData.1))
+#Part 2: Convert remaining NAs to 0
+RawData.1[is.na(RawData.1)] <- 0
+
+mean.exprs<-rowMeans(RawData.1)
+low.exprs<-mean.exprs<10
+table(low.exprs)
+RawData.1 <-RawData.1[!low.exprs,]
+table(is.na(RawData.1))
+```
+
+#Transform Data to CPM using edgeR, and total mapped reads/sample
+```{r}
+DGE=DGEList(RawData.1)
+mappedreads<-colSums(RawData.1)
+summary(mappedreads)
+DGE$samples$lib.size<-mappedreads
+Norm=calcNormFactors(DGE,method="none") #No Normalization put in here
+NormData=cpm(Norm)
+NormData<-log2(NormData+1)
+```
+
+#Quality Control Plots
+#Some QC plots of Raw, Normalized, and "voomed" data
+```{r}
+summary(RawData)
+summary(NormData)
+#Density Plot
+require (reshape)
+require (ggplot2)
+
+w.plot <- melt(RawData) 
+P1<- ggplot(aes(x=value, colour=variable), data=w.plot)
+P1<-P1+geom_density()+ theme_bw()+theme(axis.text = element_text(size = 15))
+
+w.plot <- melt(NormData)
+P2<- ggplot(aes(x=value, colour=X2), data=w.plot)
+P2<-P2+geom_density()+ theme_bw()+theme(axis.text = element_text(size = 15))
+
+P1
+P2
+
+par(mfrow=c(1,1))
+boxplot(RawData.1,which="all",main="Raw")
+boxplot(NormData,which="all",main="Normalized")
+
+plotMDS(RawData)
+plotMDS(NormData)
+#Dispersion
+d.Raw<-estimateCommonDisp(DGE,verbose=T)
+d.Raw<- estimateTagwiseDisp(d.Raw)
+d.Norm<-estimateCommonDisp(NormData,verbose=T)
+d.Norm<- estimateTagwiseDisp(d.Norm)
+hist(d.Raw$tagwise.dispersion,breaks=20)
+hist(d.Norm$tagwise.dispersion,breaks=20)
+```
+
+save(RawData,NormData,file="MData.RData")
