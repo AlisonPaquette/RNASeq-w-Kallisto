@@ -1,0 +1,159 @@
+
+
+
+```{r}
+setwd("~/Documents/Sickkidsptb/M_MRNA/")
+
+
+load("/Users/alisonpaquette/Documents/Sickkidsptb/M_MRNA/822016RawMonocyteData.RData")
+
+Covar<-read.csv("~/Documents/Sickkidsptb/Covar.csv")
+rownames(Covar)<-Covar$SampleIdentifier
+Covar<-Covar[colnames(RawData),]
+```
+
+#Remove low expressing/Mostly NA samples
+```{r}
+#Remove samples with <80% of samples NA
+bad.microrna<- rowMeans(RawData==0) > 0.5
+table(bad.microrna) #True=what you will lose
+RawData.1<-RawData[!bad.microrna,]
+
+
+mean.exprs<-rowMeans(RawData.1)
+low.exprs<-mean.exprs<20
+table(low.exprs)
+RawData.1 <-RawData.1[!low.exprs,]
+
+check<-subset(RawData.1,duplicated(RawData.1)==T) #no matching rows
+```
+
+
+#Data QC
+```{r}
+DGE.1=DGEList(RawData.1)
+Norm=calcNormFactors(DGE.1,method="TMM") #No Normalization put in here
+NormData=cpm(Norm)
+NormData<-log2(NormData)
+
+NormData[NormData=="-Inf"]<-0
+summary(RawData.1)
+summary(NormData)
+
+Covar<-Covar[(colnames(NormData)),]
+
+FLAG<-as.factor(Covar$FLAG_M_MI)
+FLAG<-as.character(recode(FLAG, "'N'='azure3'; 'FLAG'='red'"))
+
+#need to ensure that row names = col names
+table(rownames(Covar)==colnames(RawData.1))
+
+w.plot<-melt(RawData.1)
+X<-w.plot$value
+GROUP<-w.plot$variable
+sm.density.compare(X,GROUP)#,col=FLAG)
+
+w.plot<-melt(NormData)
+X<-w.plot$value
+GROUP<-w.plot$X2
+sm.density.compare(X,GROUP)#,col=FLAG)
+
+
+plotMDS(RawData.1)#,col=FLAG)
+plotMDS(NormData)#,col=FLAG)
+
+
+par(mfrow=c(1,1))
+boxplot(RawData.1,which="all",col=FLAG)
+boxplot(NormData,which="all",col=FLAG)
+
+
+
+##Entrez Ids to Gnes####
+library(biomaRt)
+mart <- useDataset("hsapiens_gene_ensembl", useMart("ensembl"))
+GENES<-rownames(RawData.1)
+G_list <- getBM(filters= "ensembl_transcript_id", attributes= c("hgnc_symbol","ensembl_transcript_id"),values=GENES,mart= mart)
+G_list$ensembl_transcript_id<-as.character(G_list$ensembl_transcript_id)
+#G_list<-G_list[-32,] weird blank dont konw why
+rownames(G_list)<-as.character(G_list$ensembl_transcript_id)
+TEMP1<-merge(G_list,RawData.1,by.x="ensembl_transcript_id",by.y='row.names',all=F)
+
+
+#Need to remove ENSEMBL IDS that track to MULTIPLE GENES!!
+table(duplicated(TEMP1$ensembl_transcript_id))
+TEMP2<-TEMP1[!duplicated(TEMP1$ensembl_transcript_id),]
+rownames(TEMP2)<-TEMP2$ensembl_transcript_id
+TEMP2$ensembl_transcript_id<-as.character(TEMP2$ensembl_transcript_id)
+x<-list((TEMP2$hgnc_symbol))
+TEMP3<-TEMP2[,-c(1:2)]
+TEMP4<-aggregate(TEMP3,by=x,FUN=mean,na.rm=TRUE, na.action=NULL)
+rownames(TEMP4)<-TEMP4$Group.1
+TEMP4<-TEMP4[,-1]
+M_MRNA.raw<-TEMP4
+save(M_MRNA.raw,file="mRNA_M_Raw82.RData")
+
+
+```
+
+
+#Identifying Differentially Expressed miRNAs
+```{r}
+#Step 1; Make sure rows of covariate matrix and columns of design matrix are the same
+table(rownames(Covar)==colnames(RawData.1))
+
+#Generate groups of these covariates for Design matrix
+group<-factor(Covar$PretermStatus)
+
+#Create DGEList of Raw Data, with group included)
+y <- DGEList(counts=RawData.1,group=group)
+#make sure normalization occurs as TMM
+y <- calcNormFactors(y,method="TMM")
+
+#Create Design Matrix
+design <- model.matrix(~group)
+
+#Estimate Dispersion: Maximizes the negative binomial likelihood to give the estimate of the common, trended and tagwise dispersions across all tags
+y <- estimateDisp(y,design)
+plotBCV(y)
+
+#Now Y is ready to get fit!
+#glmFIT: Fitting a linear regression model to the read counts to each gene, condcuting a genewise statistical test
+fit <- glmFit(y,design)
+
+#Need to perform the likelyood ratio test to tell it what you need to look at
+design[,2] #is this what you want to look at?  It is the column of the design matrix you specificy :)
+lrt <- glmLRT(fit,coef=2)
+```
+
+#Visualize and tabulate output of LRT
+```{r}
+#Get list of DEGs with FDR >0.05
+summary(dt <- decideTestsDGE(lrt))
+ 
+isDE <- as.logical(dt)
+DEnames <- rownames(y)[isDE]
+#Then we can plot all the logFCs against average count size, highlighting the DE genes:
+plotSmear(lrt, de.tags=DEnames,cex=0.5,smearWidth=1,xlab="Mean Expression",ylab="Log Fold Change")
+abline(h=c(-1,1), col="blue")
+
+
+#Subset and write.csv of the top 52 Genes
+write.csv(topTags(lrt,n=3712),file="DE_M_MRNAs27112016.csv")
+
+miRNAs<-rownames(topTags(lrt,n=10))
+
+
+sig.Norm<-t(NormData[miRNAs,])
+
+par(mai=c(.5,.5,.25,.25),mfrow=c(2,5))
+for (i in 1:10){
+  #test<-cor.test(X.Rank[,i], Y.Rank[,i],method="spearman",paired=T,exact=F)
+    X.Dat<-(sig.Norm[1:30,i]) #needs to be changed!
+    Y.Dat<-(sig.Norm[31:41,i]) #needs to be changed
+    boxplot(X.Dat,Y.Dat,main=as.character(miRNAs[i]),col=c("green","blue"),notch=F)
+}
+
+
+```
+
